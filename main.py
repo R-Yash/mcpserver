@@ -1,10 +1,8 @@
 from fastmcp import FastMCP
+import os
 
-# Create MCP server instance
-mcp = FastMCP("Math Operations Server")
-
-# Export the app for Vercel
-app = mcp.http_app()
+PORT = os.getenv("PORT", 8000)
+mcp = FastMCP("demo",host=os.getenv("HOST", "0.0.0.0"),port=PORT)
 
 @mcp.tool()
 def add(a: float, b: float) -> float:
@@ -32,11 +30,5 @@ def multiply(a: float, b: float) -> float:
     """
     return a * b
 
-def main():
-    """Run the MCP server."""
-    print("Starting Math Operations MCP Server...")
-    # Run with HTTP transport
-    mcp.run(transport="http")
-
 if __name__ == "__main__":
-    main()
+    mcp.run(transport="streamable-http")

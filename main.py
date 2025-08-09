@@ -2,11 +2,6 @@ from fastmcp import FastMCP
 import os
 import uuid
 from typing import List, Dict, Any
-import time
-import threading
-import cgi
-from http.server import HTTPServer, BaseHTTPRequestHandler
-from urllib.parse import urlparse
 
 from dotenv import load_dotenv
 
@@ -46,17 +41,6 @@ OPENAI_EMBEDDING_MODEL = os.getenv("OPENAI_EMBEDDING_MODEL", "text-embedding-3-s
 
 # Persistent Chroma client for collection management
 chroma_client = chromadb.PersistentClient(path=CHROMA_DIR)
-
-# Simple upload gateway (Approach 3: pre-signed one-tap link)
-UPLOAD_ENABLED = os.getenv("UPLOAD_ENABLED", "true").lower() in {"1", "true", "yes"}
-UPLOAD_HOST = os.getenv("UPLOAD_HOST", "0.0.0.0")
-UPLOAD_PORT = int(os.getenv("UPLOAD_PORT", 9001))
-UPLOAD_DIR = os.getenv("UPLOAD_DIR", os.path.join(os.getcwd(), "uploads"))
-UPLOAD_PUBLIC_BASE = os.getenv("UPLOAD_PUBLIC_BASE", f"http://localhost:{UPLOAD_PORT}")
-os.makedirs(UPLOAD_DIR, exist_ok=True)
-
-# token -> {"collection": str, "expires_at": float}
-UPLOAD_TOKENS: Dict[str, Dict[str, Any]] = {}
 
 def get_or_create_collection(collection: str):
     return chroma_client.get_or_create_collection(name=collection)
@@ -246,138 +230,5 @@ def rag_answer(
         "used_model": model_name,
     }
 
-
-# -----------------------------
-# Minimal stdlib upload server
-# -----------------------------
-class UploadHTTPRequestHandler(BaseHTTPRequestHandler):
-    def do_GET(self):  # noqa: N802
-        parsed = urlparse(self.path)
-        parts = parsed.path.strip("/").split("/")
-        if len(parts) == 2 and parts[0] == "u":
-            token = parts[1]
-            record = UPLOAD_TOKENS.get(token)
-            if not record or time.time() > record.get("expires_at", 0):
-                self._send_response(410, "<h1>Link expired</h1>")
-                return
-            html = f"""
-<!doctype html>
-<html><head><meta charset='utf-8'><title>Upload PDF</title></head>
-<body>
-  <h3>Upload PDF to collection: {record['collection']}</h3>
-  <form method='POST' enctype='multipart/form-data'>
-    <input type='file' name='file' accept='application/pdf' required />
-    <br/><br/>
-    <label>Chunk size: <input type='number' name='chunk_size' value='1000'/></label>
-    <label>Overlap: <input type='number' name='chunk_overlap' value='200'/></label>
-    <br/><br/>
-    <button type='submit'>Upload</button>
-  </form>
-</body></html>
-"""
-            self._send_response(200, html, content_type="text/html; charset=utf-8")
-            return
-        self._send_response(404, "Not found")
-
-    def do_POST(self):  # noqa: N802
-        parsed = urlparse(self.path)
-        parts = parsed.path.strip("/").split("/")
-        if len(parts) == 2 and parts[0] == "u":
-            token = parts[1]
-            record = UPLOAD_TOKENS.get(token)
-            if not record or time.time() > record.get("expires_at", 0):
-                self._send_response(410, "<h1>Link expired</h1>")
-                return
-
-            ctype, pdict = cgi.parse_header(self.headers.get('content-type', ''))
-            if ctype != 'multipart/form-data':
-                self._send_response(400, "Expected multipart/form-data")
-                return
-            pdict['boundary'] = pdict['boundary'].encode('utf-8') if isinstance(pdict.get('boundary'), str) else pdict.get('boundary')
-            pdict['CONTENT-LENGTH'] = int(self.headers.get('content-length', '0'))
-            form = cgi.FieldStorage(fp=self.rfile, headers=self.headers, environ={'REQUEST_METHOD': 'POST'}, keep_blank_values=True)
-
-            file_field = form['file'] if 'file' in form else None
-            if not file_field or not getattr(file_field, 'filename', None):
-                self._send_response(400, "No file uploaded")
-                return
-
-            chunk_size = int(form.getfirst('chunk_size', '1000'))
-            chunk_overlap = int(form.getfirst('chunk_overlap', '200'))
-            safe_name = os.path.basename(file_field.filename)
-            dest_path = os.path.join(UPLOAD_DIR, f"{uuid.uuid4()}-{safe_name}")
-
-            # Save file
-            with open(dest_path, 'wb') as out:
-                data = file_field.file.read()
-                out.write(data)
-
-            # Ingest
-            try:
-                summary = rag_ingest_pdf(
-                    collection=record['collection'],
-                    file_path=dest_path,
-                    chunk_size=chunk_size,
-                    chunk_overlap=chunk_overlap,
-                )
-            except Exception as e:
-                self._send_response(400, f"<h1>Ingest failed</h1><pre>{e}</pre>", content_type="text/html; charset=utf-8")
-                return
-
-            # Invalidate token after single use
-            UPLOAD_TOKENS.pop(token, None)
-
-            html = f"""
-<!doctype html>
-<html><head><meta charset='utf-8'><title>Uploaded</title></head>
-<body>
-  <h3>Upload successful</h3>
-  <p>Saved as: {summary['file']}</p>
-  <p>Collection: {summary['collection']}</p>
-  <p>Chunks added: {summary['chunks_added']}</p>
-</body></html>
-"""
-            self._send_response(200, html, content_type="text/html; charset=utf-8")
-            return
-        self._send_response(404, "Not found")
-
-    def log_message(self, format, *args):  # suppress console spam
-        return
-
-    def _send_response(self, status_code: int, body: str, content_type: str = "text/plain; charset=utf-8"):
-        body_bytes = body.encode('utf-8')
-        self.send_response(status_code)
-        self.send_header('Content-Type', content_type)
-        self.send_header('Content-Length', str(len(body_bytes)))
-        self.end_headers()
-        self.wfile.write(body_bytes)
-
-
-def start_upload_server():
-    if not UPLOAD_ENABLED:
-        return
-    server = HTTPServer((UPLOAD_HOST, UPLOAD_PORT), UploadHTTPRequestHandler)
-    server.serve_forever()
-
-
-@mcp.tool()
-def rag_create_upload_link(collection: str, expires_in_seconds: int = 600) -> Dict[str, Any]:
-    """Create a one-time upload link for a PDF that auto-ingests into a collection.
-
-    Returns a URL the user can tap to upload directly from the phone.
-    """
-    if expires_in_seconds < 60:
-        expires_in_seconds = 60
-    token = uuid.uuid4().hex
-    UPLOAD_TOKENS[token] = {
-        "collection": collection,
-        "expires_at": time.time() + expires_in_seconds,
-    }
-    url = f"{UPLOAD_PUBLIC_BASE}/u/{token}"
-    return {"upload_url": url, "expires_at": int(UPLOAD_TOKENS[token]["expires_at"]) }
-
 if __name__ == "__main__":
-    # Start upload server in background
-    threading.Thread(target=start_upload_server, daemon=True).start()
-    # Start MCP server
     mcp.run(transport="streamable-http")

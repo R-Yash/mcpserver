@@ -64,9 +64,10 @@ Once deployed, the MCP server will be available at your Vercel URL. The server e
 ```
 MCPServer/
 ├── api/
-│   └── index.py     # MCP server implementation
-├── requirements.txt # Python dependencies
-├── vercel.json     # Vercel deployment configuration
-├── pyproject.toml  # Project metadata
-└── README.md       # This file
+│   ├── index.py        # MCP server implementation
+│   └── requirements.txt # Python dependencies for Vercel
+├── requirements.txt    # Python dependencies for local dev
+├── vercel.json        # Vercel deployment configuration
+├── pyproject.toml     # Project metadata
+└── README.md          # This file
 ```

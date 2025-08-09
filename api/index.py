@@ -3,9 +3,6 @@ from fastmcp import FastMCP
 # Create MCP server instance
 mcp = FastMCP("Math Operations Server")
 
-# Export the app for Vercel
-app = mcp.http_app()
-
 @mcp.tool()
 def add(a: float, b: float) -> float:
     """Add two numbers together.
@@ -32,11 +29,5 @@ def multiply(a: float, b: float) -> float:
     """
     return a * b
 
-def main():
-    """Run the MCP server."""
-    print("Starting Math Operations MCP Server...")
-    # Run with HTTP transport
-    mcp.run(transport="http")
-
-if __name__ == "__main__":
-    main()
+# Export the ASGI app for Vercel
+app = mcp.http_app()

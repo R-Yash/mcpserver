@@ -15,9 +15,14 @@ This server provides two tools:
 pip install -r requirements.txt
 ```
 
-2. Run the server:
+2. Run the server locally:
 ```bash
-python main.py
+python -c "from api.index import mcp; mcp.run(transport='http')"
+```
+
+Or create a simple local runner if needed:
+```bash
+cd api && python -c "import index; index.mcp.run(transport='http')"
 ```
 
 ## Deployment on Vercel
@@ -58,9 +63,10 @@ Once deployed, the MCP server will be available at your Vercel URL. The server e
 
 ```
 MCPServer/
-├── main.py           # Main MCP server implementation
-├── requirements.txt  # Python dependencies
-├── vercel.json      # Vercel deployment configuration
-├── pyproject.toml   # Project metadata
-└── README.md        # This file
+├── api/
+│   └── index.py     # MCP server implementation
+├── requirements.txt # Python dependencies
+├── vercel.json     # Vercel deployment configuration
+├── pyproject.toml  # Project metadata
+└── README.md       # This file
 ```
